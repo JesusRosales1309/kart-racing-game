@@ -1,0 +1,62 @@
+/* Headless integration harness, uses lightweight DOM/Three doubles.
+   It validates JavaScript and control flow, NOT GPU rendering or browser layout. */
+function createHarness(mobile=false) {
+ const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+ class Vector3 {constructor(x=0,y=0,z=0){this.set(x,y,z);}set(x,y,z){assert([x,y,z].every(Number.isFinite),'Non-finite vector');this.x=x;this.y=y;this.z=z;return this;}setScalar(v){return this.set(v,v,v);}clone(){return new Vector3(this.x,this.y,this.z);}sub(v){return this.set(this.x-v.x,this.y-v.y,this.z-v.z);}add(v){return this.set(this.x+v.x,this.y+v.y,this.z+v.z);}multiplyScalar(v){return this.set(this.x*v,this.y*v,this.z*v);}length(){return Math.hypot(this.x,this.y,this.z);}normalize(){return this.multiplyScalar(1/this.length());}toArray(){return [this.x,this.y,this.z];}lerp(v,t){return this.set(this.x+(v.x-this.x)*t,this.y+(v.y-this.y)*t,this.z+(v.z-this.z)*t);}}
+ class Object3D {constructor(){this.position=new Vector3();this.rotation=new Vector3();this.scale=new Vector3(1,1,1);this.quaternion={setFromUnitVectors(){}};this.children=[];this.userData={};this.visible=true;this.matrix={};}add(...items){for(const o of items){if(o.parent)o.parent.remove(o);o.parent=this;this.children.push(o);}return this;}remove(o){this.children=this.children.filter(x=>x!==o);if(o&&o.parent===this)o.parent=null;}traverse(fn){fn(this);for(const c of this.children)c.traverse(fn);}updateMatrix(){this.matrix={p:this.position.clone(),s:this.scale.clone()};}lookAt(){}updateProjectionMatrix(){}}
+ class Group extends Object3D{constructor(){super();this.isGroup=true;}}
+ class Attr{constructor(array,size){this.array=Array.from(array);this.itemSize=size;this.count=array.length/size;}getX(i){return this.array[i*this.itemSize];}getY(i){return this.array[i*this.itemSize+1];}getZ(i){return this.array[i*this.itemSize+2];}setX(i,v){this.array[i*this.itemSize]=v;}setY(i,v){this.array[i*this.itemSize+1]=v;}setZ(i,v){this.array[i*this.itemSize+2]=v;}}
+ class Geometry {constructor(){this.attributes={position:new Attr([-.5,-.5,-.5,.5,.5,.5,-.5,.5,.5,.5,-.5,-.5],3),normal:new Attr([0,1,0,0,1,0,0,1,0,0,1,0],3)};this.index=null;}setAttribute(k,a){assert(a.array.every(Number.isFinite),'Invalid geometry '+k);this.attributes[k]=a;return this;}setIndex(a){this.index=a;}clone(){const g=new Geometry();for(const[k,a]of Object.entries(this.attributes))g.attributes[k]=new Attr(a.array,a.itemSize);return g;}toNonIndexed(){return this.clone();}rotateX(){return this;}computeVertexNormals(){}computeBoundingSphere(){}dispose(){}applyMatrix4(m){if(m.p)for(let i=0;i<this.attributes.position.count;i++)for(let a=0;a<3;a++){const k=['x','y','z'][a];this.attributes.position.array[i*3+a]=this.attributes.position.array[i*3+a]*m.s[k]+m.p[k];}return this;}}
+ class Mesh extends Object3D{constructor(geometry,material){super();this.geometry=geometry;this.material=material;this.isMesh=true;}}
+ class InstancedMesh extends Mesh{constructor(g,m,n){super(g,m);this.count=n;}setMatrixAt(){}setColorAt(){}computeBoundingSphere(){}}
+ class Color{constructor(hex=0){this.hex=hex;this.r=this.g=this.b=.5;}getHex(){return this.hex;}setHex(hex){this.hex=hex;return this;}lerp(){return this;}}
+ class Light extends Object3D{constructor(){super();this.target=new Object3D();this.shadow={camera:new Object3D(),mapSize:{set(){}}};}}
+ class Shape{moveTo(){}lineTo(){}closePath(){}}
+ const events=()=>({listeners:{},addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);},dispatch(k,e={}){for(const fn of this.listeners[k]||[])fn({preventDefault(){},...e});}});
+ const context=new Proxy({createImageData(w,h){return {data:new Uint8Array(w*h*4)};}},{get(o,k){return k in o?o[k]:()=>{};}});
+ const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{...events(),id,hidden:true,style:{setProperty(){}},classList:{toggle(){}},dataset:{},appendChild(){},focus(){},setAttribute(){},querySelectorAll(){return [];},getContext(){return context;}});return nodes.get(id);}
+ const touchButtons=['left','right','gas','brake','drift','item'].map(name=>{const b=node('touch-'+name);b.dataset.touch=name;return b;});node('touch').querySelectorAll=()=>touchButtons;
+ const root=node('root');root.classList={toggle(){},add(){},remove(){}};
+ const document={...events(),documentElement:root,hidden:false,hasFocus:()=>true,getElementById:node,createElement:()=>node('canvas'+nodes.size)};
+ const window={...events(),devicePixelRatio:1,innerWidth:mobile?844:1280,innerHeight:mobile?390:800};
+ let pads=[],frames=[],now=0;const navigator={maxTouchPoints:mobile?5:0,getGamepads:()=>pads};
+ class Renderer{constructor(){this.domElement=node('renderCanvas');this.shadowMap={};this.capabilities={getMaxAnisotropy:()=>4};}setPixelRatio(){}setSize(){}setViewport(){}render(scene){scene.traverse(o=>{assert([o.position.x,o.position.y,o.position.z,o.rotation.x,o.rotation.y,o.rotation.z].every(Number.isFinite),'Non-finite render transform');});}}
+ const THREE={Vector3,Object3D,Group,Scene:Group,Mesh,Points:Mesh,LineSegments:Mesh,LineBasicMaterial:class{constructor(p){Object.assign(this,p);}},InstancedMesh,Color,HemisphereLight:Light,DirectionalLight:Light,PerspectiveCamera:class extends Object3D{constructor(fov,aspect){super();this.fov=fov;this.aspect=aspect;}},Shape,WebGLRenderer:Renderer,Float32BufferAttribute:Attr,BufferGeometry:Geometry,Fog:class{},CanvasTexture:class{},MeshStandardMaterial:class{constructor(p){Object.assign(this,p);this.color=new Color(p.color);this.emissive=new Color(p.emissive||0);this.uuid=String(Math.random());}clone(){return new THREE.MeshStandardMaterial({...this,color:this.color.getHex(),emissive:this.emissive.getHex()});}},ShaderMaterial:class{constructor(p){Object.assign(this,p);}}};
+ for(const k of ['BoxGeometry','CylinderGeometry','ConeGeometry','SphereGeometry','TorusGeometry','ExtrudeGeometry','PlaneGeometry','OctahedronGeometry','DodecahedronGeometry'])THREE[k]=Geometry;
+ return {THREE,window,document,navigator,node,assert,requestAnimationFrame:fn=>frames.push(fn),setTimeout:()=>0,tick(count=1){for(let i=0;i<count;i++){now+=1000/60;const q=frames;frames=[];q.forEach(fn=>fn(now));}},key(key,repeat=false){window.dispatch('keydown',{key,repeat});},keyup(key){window.dispatch('keyup',{key});},pad(axis=0,buttons=[]){pads=[{index:0,connected:true,mapping:'standard',id:'Test gamepad',axes:[axis],buttons:Array.from({length:16},(_,i)=>({value:buttons.includes(i)?1:0}))}];},clearPad(){pads=[];}};
+}
+function runVehicleChecks(simulation,presentation,vehicles,showroom,track,effects,audio) {
+ const summaries=[];
+ for(const mobile of[false,true]){
+  const h=createHarness(mobile),a=h.assert;
+  const source=presentation.slice(0,presentation.lastIndexOf('loadEngine().then(startGame)')).replace('openShowroom();requestAnimationFrame(frame);','openShowroom();requestAnimationFrame(frame);return {race,models,showroom,pause,restart,openShowroom,frame,camera,look,terrainHeight,keepCameraAboveTerrain,animateKart};');
+  const game=new Function('window','document','navigator','requestAnimationFrame','setTimeout','THREE',effects+'\n'+audio+'\n'+track+'\n'+simulation+'\n'+vehicles+'\n'+showroom+'\n'+source+'\nreturn startGame(THREE);')(h.window,h.document,h.navigator,h.requestAnimationFrame,h.setTimeout,h.THREE);
+  a(game.showroom.active&&game.race.phase==='ready','Initial selector');h.tick(200);a(game.race.time===0&&game.race.cars.every(c=>c.speed===0),'Physics advanced in showroom');
+  const names=[];for(let i=0;i<5;i++){const root=game.showroom.current;names.push(root.name);const parts=root.userData.parts;for(const name of['body','cabin','frontLeftWheel','frontRightWheel','rearLeftWheel','rearRightWheel'])a(!!parts[name],'Missing '+name);a(root.userData.rig.wheels.length===4,'Wheel count');h.node('vehicle-next').dispatch('click');h.tick();}a(new Set(names).size===5,'Five unique vehicles');
+  h.key('d');a(game.showroom.selected===1,'Keyboard next');h.key('d',true);a(game.showroom.selected===1,'Keyboard debounce');h.key('ArrowLeft');a(game.showroom.selected===0,'Keyboard previous');h.node('vehicle-prev').dispatch('click');a(game.showroom.selected===4,'Mouse wrap');
+  h.pad(1);h.tick(60);a(game.showroom.selected===0,'Stick debounce');h.pad(0);h.tick();h.pad(0,[14]);h.tick(60);a(game.showroom.selected===4,'Dpad debounce');h.pad(0);h.tick();h.clearPad();
+  for(let i=0;i<5;i++){
+   const chosen=game.showroom.current,before=JSON.stringify(game.race.cars[0]);
+   if(i===0)h.key('Enter');else if(i===1){h.pad(0,[0]);h.tick();h.pad(0);h.tick();h.clearPad();}else h.node('vehicle-start').dispatch('click');
+   a(!game.showroom.active&&game.models[0].g===chosen,'Chosen model must be used in race');a(new Set(game.models.map(m=>m.g.userData.vehicleType)).size===4,'Distinct rival designs');a(game.race.phase==='countdown','Countdown');a(JSON.stringify(game.race.cars[0])===before,'Model altered physics');h.tick(220);
+   h.key('w');h.tick(60);h.key('d');h.tick(10);h.keyup('d');h.keyup('w');a(game.race.cars[0].speed>0,'Accelerate');a(game.models[0].wheels[0].spin.rotation.z!==0,'Wheel spin');a(game.models[0].wheels[0].pivot.rotation.y!==0,'Front steering');a(game.models[0].wheels[2].pivot.rotation.y===0,'Rear steering');a(game.race.cars[1].loc.s!==.982,'AI moves');if(mobile){h.node('touch-gas').dispatch('pointerdown',{pointerId:1,pointerType:'touch'});h.node('touch-right').dispatch('pointerdown',{pointerId:2,pointerType:'touch'});h.tick(5);h.node('touch-gas').dispatch('pointerup',{pointerId:1});h.node('touch-right').dispatch('pointercancel',{pointerId:2});a(game.race.cars[0].speed>0,'Touch driving');}a(h.node('time').textContent!=='00:00.000','HUD');
+   const selected=game.showroom.selected;game.showroom.change(1);a(game.showroom.selected===selected,'Selection changed during race');game.openShowroom();a(!game.showroom.active,'Change action allowed during racing');game.pause();const time=game.race.time;h.tick(5);a(game.race.time===time,'Pause');h.node('action').onclick();h.tick();a(!game.race.paused,'Resume');game.restart();a(game.models[0].g===chosen&&game.race.phase==='countdown','Restart keeps vehicle');if(i===4){for(let frame=0;frame<180*60&&game.race.phase!=='finished';frame++)game.race.step(1/60,game.race.ai(game.race.cars[0]));a(game.race.phase==='finished'&&game.race.cars[0].lap===3,'Three laps');h.tick(10);a(h.node('change-vehicle').hidden===false,'Finish offers change vehicle');}else game.pause();if(i===0){h.pad(0,[2]);h.tick();h.clearPad();}else if(i===1)h.key('c');else h.node('change-vehicle').dispatch('click');a(game.showroom.active&&game.race.time===0,'Return to selector resets race');h.node('vehicle-next').dispatch('click');h.tick();
+  }
+  // All rivals finish against the real generated scenery while the player waits.
+  game.race.reset(true);const off=[0,0,0,0];let steered=false,spun=false;
+  for(let frame=0;frame<18000&&!game.race.cars.slice(1).every(c=>c.finished);frame++){
+   game.race.step(1/60,{up:0,down:0,turn:0,drift:false});
+   for(let i=1;i<4;i++){const c=game.race.cars[i],m=game.models[i];if(!c.loc.road)off[i]++;game.animateKart(m,c,1/60,frame*1000/60);steered ||= Math.abs(m.wheels[0].pivot.rotation.y)>.02;spun ||= Math.abs(m.wheels[0].spin.rotation.z)>.02;a(Math.abs(m.g.position.y-game.terrainHeight(c.x,c.z)-.34)<1e-8,'Rival ground height');}
+  }
+  a(game.race.cars.slice(1).every(c=>c.finished&&c.lap===3),'Every rival finishes with scenery');a(off.slice(1).every(n=>n===0),'AI stays on asphalt');a(steered&&spun,'Rival wheels steer and spin');
+  const circuit=new Function(track+';return KartTrack;')();let clearance=Infinity;
+  for(let i=0;i<1000;i++){
+   const s=i/1000,p=circuit.point(s),angle=circuit.heading(s),position=new h.THREE.Vector3(p.x-Math.cos(angle)*11,p.y+6.5,p.z-Math.sin(angle)*11),target=new h.THREE.Vector3(p.x+Math.cos(angle)*6,circuit.point(s+6/circuit.length).y+1,p.z+Math.sin(angle)*6);
+   game.keepCameraAboveTerrain(position,target);
+   for(let j=0;j<=20;j++){const t=j/20,x=position.x+(target.x-position.x)*t,z=position.z+(target.z-position.z)*t,y=position.y+(target.y-position.y)*t;clearance=Math.min(clearance,y-game.terrainHeight(x,z));}
+  }
+  a(clearance>.4,'Camera view stays above terrain');
+  summaries.push({mobile,models:names,selector:'PASS',keyboard:'PASS',mouse:'PASS',gamepad:'PASS',physicsIsolation:'PASS',raceTransitions:'PASS',wheels:'PASS',ai:'PASS',hud:'PASS',allRivalsFinish:true,offroadFrames:off,minimumCameraClearance:clearance});
+ }
+ return summaries;
+}
